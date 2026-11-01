@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flipper</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <img src="icons/icon48.png" alt="" width="24" height="24">
+      <h1>Flipper</h1>
+    </div>
+    <label class="switch" title="Turn flipping on or off (Alt+Shift+F)">
+      <input type="checkbox" id="enabled" role="switch" checked aria-label="Flip my camera">
+      <span class="track"><span class="thumb"></span></span>
+    </label>
+  </header>
+
+  <div class="preview" aria-hidden="true">
+    <div class="pane" id="paneSelf">
+      <canvas class="live" id="liveSelf"></canvas>
+      <span class="sample">F</span>
+      <span class="cap">Your self-view</span>
+    </div>
+    <div class="pane" id="paneOthers">
+      <canvas class="live" id="liveOthers"></canvas>
+      <span class="sample">F</span>
+      <span class="cap">What others see</span>
+    </div>
+  </div>
+
+  <fieldset>
+    <legend>Flip what others see</legend>
+    <div class="seg">
+      <label><input type="radio" name="mode" value="horizontal" checked><span>Horizontal</span></label>
+      <label><input type="radio" name="mode" value="vertical"><span>Vertical</span></label>
+      <label><input type="radio" name="mode" value="both"><span>Both</span></label>
+    </div>
+  </fieldset>
+
+  <div class="status" id="status" data-tone="idle" role="status">
+    <span class="dot"></span>
+    <span id="statusText">Checking this tab…</span>
+  </div>
+  <p class="hint">Your self-view stays as Meet shows it. Meet mirrors that tile, so with Flipper off others see you flipped left to right. Flipper applies your chosen direction to what others receive, so Horizontal makes them see what you see. Toggle anytime with Alt+Shift+F.</p>
+
+  <script src="popup.js"></script>
+</body>
+</html>

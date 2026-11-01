@@ -1,0 +1,399 @@
+:root {
+  color-scheme: light dark;
+  --paper: #eef1f6;
+  --card: #ffffff;
+  --ink: #161a27;
+  --muted: #5a6275;
+  --line: #d3d9e5;
+  --accent: #0b8f78;
+  --warn: #a15c07;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #12151d;
+    --card: #1b202c;
+    --ink: #edf0f7;
+    --muted: #99a2b7;
+    --line: #2d3445;
+    --accent: #2fd0aa;
+    --warn: #f0b44c;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  width: 340px;
+  padding: 14px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 14px/1.4 system-ui, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
+}
+
+/* The markup holds the default settings and popup.js swaps in the saved ones a moment later.
+   Until it has, stay hidden and keep every transition off, so nothing visibly animates from the
+   defaults to the saved state. Hiding alone is not enough: transitions keep running while hidden
+   and would still be in motion when the popup appears. */
+html:not(.ready) body {
+  visibility: hidden;
+}
+
+html:not(.ready) *,
+html:not(.ready) *::before,
+html:not(.ready) *::after {
+  transition: none !important;
+}
+
+/* Header ---------------------------------------------------------------- */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand img {
+  border-radius: 6px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.switch {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 26px;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.switch .track {
+  position: absolute;
+  inset: 0;
+  border-radius: 13px;
+  background: var(--line);
+  pointer-events: none;
+  transition: background 0.18s;
+}
+
+.switch .thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 0.18s;
+}
+
+.switch input:checked + .track {
+  background: var(--accent);
+}
+
+.switch input:checked + .track .thumb {
+  transform: translateX(18px);
+}
+
+.switch input:focus-visible + .track {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* Preview: two panes, each with an F and the dashed mirror axes ---------- */
+.preview {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.pane {
+  --axis-clear: 34px; /* how far up from the bottom the dashed vertical line stops, clear of the caption pill */
+  --f-lift-y: 10px; /* raise the F so the axes cross at its optical centre: F has two heavy arms up top
+                        and just a bare stem below, so that centre sits a little above the bounding-box
+                        middle. The horizontal axis moves up with it by the same amount. */
+  --f-lift-x: 3px; /* same idea sideways: the arms extend right of the stem, so the optical centre sits
+                       a little left of the bounding-box middle. The vertical axis shifts with it. */
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 112px; /* a 16:9 picture (150 x 84), edge to edge; the caption floats over it */
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.pane .sample {
+  position: relative;
+  top: calc(-1 * var(--f-lift-y));
+  left: calc(-1 * var(--f-lift-x));
+  font: 700 50px/1 Georgia, "Times New Roman", serif;
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s;
+}
+
+/* Dashed mirror axes. They cross at the centre of the F and stop short of the caption. */
+.pane::before,
+.pane::after {
+  content: "";
+  position: absolute;
+  /* The flip transform on .sample gives it its own stacking context, which would otherwise let it
+     paint over ::before. Pin the axes above that with an explicit z-index so they stay in front of
+     the glyph in every mode, not just the ones where .sample happens to have no transform. */
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+
+.pane::before {
+  top: 10px;
+  bottom: var(--axis-clear);
+  left: calc(50% - var(--f-lift-x));
+  border-left: 1.5px dashed var(--line);
+}
+
+.pane::after {
+  left: 10px;
+  right: 10px;
+  top: calc(50% - var(--f-lift-y));
+  border-top: 1.5px dashed var(--line);
+}
+
+/* Live camera. popup.js fills the two canvases with frames from the Meet tab and adds .is-live to
+   the panes while frames are arriving; otherwise the F placeholder above is what shows. The picture
+   fills the tile, and the caption pill floats on top of it (see .pane .cap below). */
+.pane .live {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  visibility: hidden; /* not rendered, so it cannot sit over the F while there is no camera */
+  transition: opacity 0.2s, visibility 0s linear 0.2s; /* fade out first, then stop rendering */
+}
+
+/* Meet mirrors your self-view. The frames are Meet's raw track, so mirror them the same way. The
+   other tile shows exactly what is sent, and other people's Meet does not mirror it. */
+#paneSelf .live {
+  transform: scaleX(-1);
+}
+
+.pane.is-live .live {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+/* The F fades out and then stops rendering, so no invisible layer is left over the picture. */
+.pane.is-live .sample {
+  opacity: 0;
+  visibility: hidden;
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s, visibility 0s linear 0.2s;
+}
+
+/* The video already shows the result, so the dashed axes would only be in the way. Taking them out
+   of the layout, rather than fading them, also leaves nothing stacked over the picture. */
+.pane.is-live::before,
+.pane.is-live::after {
+  display: none;
+}
+
+/* Before a call, the pill sits on the plain card background, so it can just use the same light/dark
+   theme tokens as everything else. z-index lifts it above the axes (1). */
+.pane .cap {
+  position: absolute;
+  z-index: 2;
+  left: 5px;
+  bottom: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--line);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Once real video is behind it, the theme tokens no longer make sense: the picture can be bright or
+   dark regardless of which theme the popup itself is in. So live overrides the pill with fixed dark
+   glass, which reads reliably over any footage, rather than blending with the surrounding UI. */
+.pane.is-live .cap {
+  background: rgba(10, 12, 18, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(8px) saturate(160%);
+  -webkit-backdrop-filter: blur(8px) saturate(160%);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* What the panes show. Your self-view (left) is the reference and never flips. Meet mirrors that
+   tile, so with Flipper off other people get it flipped left/right. Turning Flipper on applies the
+   chosen direction to what they receive, and two flips on the same axis cancel:
+     off         -> flipped horizontally
+     Horizontal  -> plain F (they see what you see)
+     Vertical    -> flipped both ways
+     Both        -> flipped vertically
+   The "what others see" pane reads the switch and the Direction buttons directly, so it changes
+   the instant they do and can never lag behind them or get stuck if the popup script is slow. */
+body:has(#enabled:not(:checked)) #paneOthers .sample {
+  transform: scaleX(-1);
+}
+
+body:has(#enabled:checked):has(input[name="mode"][value="vertical"]:checked) #paneOthers .sample {
+  transform: scale(-1, -1);
+}
+
+body:has(#enabled:checked):has(input[name="mode"][value="both"]:checked) #paneOthers .sample {
+  transform: scaleY(-1);
+}
+
+/* The dashed axes mark the direction currently selected, drawn on both panes: the vertical line
+   is the left/right flip (Horizontal), the horizontal line is the up/down flip (Vertical), and
+   Both shows both. This tracks the Direction radios only, so it keeps showing the picked
+   direction even while the switch is off, instead of forcing the vertical axis. */
+body:has(input[name="mode"][value="horizontal"]:checked) .pane::before,
+body:has(input[name="mode"][value="both"]:checked) .pane::before,
+body:has(input[name="mode"][value="vertical"]:checked) .pane::after,
+body:has(input[name="mode"][value="both"]:checked) .pane::after {
+  opacity: 1;
+}
+
+/* Direction control ------------------------------------------------------ */
+fieldset {
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+legend {
+  margin-bottom: 6px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.seg {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--card);
+  transition: opacity 0.18s;
+}
+
+.seg label {
+  position: relative;
+}
+
+.seg input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.seg span {
+  display: block;
+  padding: 6px 0;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.seg input:checked + span {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.seg input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.seg input:disabled {
+  cursor: default;
+}
+
+.is-off .seg {
+  opacity: 0.55;
+}
+
+/* Status ---------------------------------------------------------------- */
+.status {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dot {
+  flex: none;
+  margin-top: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.status[data-tone="ok"] .dot {
+  background: var(--accent);
+}
+
+.status[data-tone="warn"] .dot {
+  background: var(--warn);
+}
+
+.hint {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+  }
+}
