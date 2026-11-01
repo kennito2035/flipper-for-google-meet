@@ -3,30 +3,6 @@
 
   const DEFAULTS = { enabled: true, mode: 'horizontal' };
 
-  // Opened as a plain file (double-clicking popup.html) instead of as the installed extension,
-  // there is no chrome.storage or chrome.tabs. Fall back to an in-memory store so the popup can
-  // still be previewed and clicked through; nothing is saved and nothing reaches Meet.
-  const standalone = !(typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local && chrome.tabs);
-  if (standalone) {
-    const memory = {};
-    const listeners = [];
-    window.chrome = {
-      ...(window.chrome || {}),
-      storage: {
-        local: {
-          get: async (defaults) => ({ ...defaults, ...memory }),
-          set: async (patch) => {
-            const changes = {};
-            for (const key of Object.keys(patch)) changes[key] = { newValue: patch[key] };
-            Object.assign(memory, patch);
-            listeners.forEach((fn) => fn(changes, 'local'));
-          },
-        },
-        onChanged: { addListener: (fn) => listeners.push(fn) },
-      },
-    };
-  }
-
   const enabledEl = document.getElementById('enabled');
   const modeEls = Array.from(document.querySelectorAll('input[name="mode"]'));
   const statusEl = document.getElementById('status');
@@ -38,9 +14,10 @@
   let state = { ...DEFAULTS };
 
   // Live tiles ------------------------------------------------------------------------------
-  // While a Meet tab is sending your camera, page.js posts small JPEGs of two tracks: Meet's own
-  // (your self-view, mirrored here the way Meet mirrors it) and the flipped copy that is actually
-  // sent to other people. They arrive over a port to bridge.js and are painted into the two tiles.
+  // While a Meet tab is sending your camera, page.js posts two small JPEGs: a picture of Meet's own
+  // track (your self-view, mirrored here the way Meet mirrors it) and that same picture flipped
+  // exactly the way the outgoing video is. They arrive over a port to bridge.js and are painted
+  // into the two tiles.
   // Without frames the tiles show their F placeholder.
   let port = null;
   let live = false;
@@ -139,45 +116,71 @@
     statusTextEl.textContent = text;
   }
 
+  const NOT_RUNNING = "Flipper isn't running on this tab. Reload the Meet tab.";
+  let refreshSeq = 0; // several refreshes can overlap; only the newest one may write the status
+  let missedPings = 0; // consecutive pings page.js did not answer in time
+
   async function refreshStatus() {
-    if (standalone) {
-      setStatus('idle', 'Preview only. Load Flipper as an extension to use it in Meet.');
-      return;
-    }
+    const seq = ++refreshSeq;
+    const current = () => seq === refreshSeq;
     let tab;
     try {
       [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     } catch {
       tab = null;
     }
+    if (!current()) return;
     // tab.url is only visible for hosts the extension has access to, i.e. meet.google.com.
     if (!tab || !tab.url || !tab.url.startsWith('https://meet.google.com/')) {
+      missedPings = 0;
       setStatus('idle', 'Open a Google Meet tab to use Flipper.');
       return;
     }
+    let reply;
     try {
-      const reply = await chrome.tabs.sendMessage(tab.id, { type: 'flipper:getStatus' });
-      if (!reply || !reply.page) {
-        setStatus('warn', "Flipper isn't running on this tab. Reload the Meet tab.");
-      } else {
-        keepPreviewAlive(tab.id);
-        if (reply.active > 0) {
-          setStatus('ok', state.enabled ? 'Flipping your camera.' : 'Camera is on. Flip is off.');
-        } else {
-          setStatus('idle', 'Ready. Flipping starts once you are in a call with your camera on.');
-        }
-      }
+      reply = await chrome.tabs.sendMessage(tab.id, { type: 'flipper:getStatus' });
     } catch {
-      // No content script answered: the tab was opened before Flipper was installed or reloaded.
-      setStatus('warn', "Flipper isn't running on this tab. Reload the Meet tab.");
+      // No content script answered at all: the tab was opened before Flipper was installed or
+      // reloaded. That is certain, so say so straight away.
+      if (current()) setStatus('warn', NOT_RUNNING);
+      return;
+    }
+    if (!current()) return;
+    if (!reply || !reply.page) {
+      // bridge.js is there but page.js did not answer in time. A busy Meet tab can miss one ping,
+      // so only warn when it happens twice in a row.
+      missedPings += 1;
+      if (missedPings >= 2) setStatus('warn', NOT_RUNNING);
+      return;
+    }
+    missedPings = 0;
+    keepPreviewAlive(tab.id);
+    if (reply.active > 0) {
+      setStatus('ok', state.enabled ? 'Flipping your camera.' : 'Camera is on. Flip is off.');
+    } else {
+      setStatus('idle', 'Ready. Flipping starts once you are in a call with your camera on.');
     }
   }
 
+  async function loadState() {
+    try {
+      state = { ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)) };
+    } catch {
+      /* storage unavailable: show the defaults rather than a blank popup */
+    }
+    render();
+  }
+
+  // The storage change listener below refreshes the status once the save lands.
   function update(patch) {
+    const before = state;
     state = { ...state, ...patch };
     render();
-    chrome.storage.local.set(patch).then(refreshStatus).catch(() => {
-      /* extension context invalidated (e.g. reloaded while the popup was open); nothing to save to */
+    chrome.storage.local.set(patch).catch(() => {
+      // Not saved (e.g. the extension was reloaded while the popup was open): put the controls
+      // back to what is really in effect instead of a choice that never took.
+      state = before;
+      render();
     });
   }
 
@@ -201,12 +204,7 @@
   });
 
   (async () => {
-    try {
-      state = { ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)) };
-    } catch {
-      /* storage unavailable: show the defaults rather than a blank popup */
-    }
-    render();
+    await loadState();
     // popup.css keeps the popup hidden and every transition off until 'ready'. Reading the layout
     // first makes the browser apply the saved state while they are still off; adding the class in
     // the same breath would let the change animate.

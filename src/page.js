@@ -11,9 +11,32 @@
 (() => {
   'use strict';
 
-  if (window.__flipperInstalled) return; // never wrap twice
+  // Never wrap twice. A symbol key, defined non-enumerable, keeps the marker out of the way of
+  // Meet's own code instead of leaving a plain global on its window.
+  const INSTALLED = Symbol.for('flipper.installed');
+  if (window[INSTALLED]) return;
   if (typeof RTCPeerConnection !== 'function' || typeof RTCRtpSender !== 'function') return;
-  window.__flipperInstalled = true;
+  Object.defineProperty(window, INSTALLED, { value: true });
+
+  // The native WebRTC methods, captured before they are wrapped at the bottom of this file.
+  const pcProto = RTCPeerConnection.prototype;
+  const senderProto = RTCRtpSender.prototype;
+  const nativeAddTrack = pcProto.addTrack;
+  const nativeAddTransceiver = pcProto.addTransceiver;
+  const nativeRemoveTrack = pcProto.removeTrack;
+  const nativeGetStats = pcProto.getStats;
+  const nativeReplaceTrack = senderProto.replaceTrack;
+  const nativeTrack = Object.getOwnPropertyDescriptor(senderProto, 'track');
+
+  // The track a sender really carries (our copy, where Flipper swapped one in), bypassing the
+  // patched getter that shows Meet its own track.
+  function senderTrack(sender) {
+    try {
+      return nativeTrack && nativeTrack.get ? nativeTrack.get.call(sender) : sender.track;
+    } catch {
+      return null;
+    }
+  }
 
   const FROM_BRIDGE = 'flipper-content';
   const TO_BRIDGE = 'flipper-page';
@@ -56,20 +79,26 @@
     ctx.restore();
   }
 
-  // Keeps Meet's track and our flipped copy in step, in both directions:
+  // Keeps Meet's track and our flipped copy in step:
   //  - when Meet stops its track (camera off) or it ends (camera unplugged), the copy stops too,
   //    so nothing keeps running behind Meet's back;
-  //  - when the copy ends on its own, we release whatever feeds it, and flippedCopy() builds a
-  //    fresh one the next time Meet hands us that track.
-  // A source can get a new copy over time, but its stop() and 'ended' hooks are installed only
-  // once and always call the finish() of the copy currently linked to it.
+  //  - when Meet moves a sender off our copy (replaceTrack, removeTrack) and no other sender still
+  //    carries it, the copy is released instead of running on unseen;
+  //  - when the copy dies while Meet's track is still live (the flip pipeline failed), Meet's own
+  //    track is put back on every sender that carried the copy, so the call goes on unflipped
+  //    instead of showing everyone a frozen picture.
+  // In every case we release whatever fed the copy, and flippedCopy() builds a fresh one the next
+  // time Meet hands us that track. A source can get a new copy over time, but its stop() and
+  // 'ended' hooks are installed only once and always call the finish() of the copy currently
+  // linked to it.
   const wrappedSources = new WeakSet();
   const currentFinish = new WeakMap(); // source track -> finish() for the copy presently linked to it
-  const livePairs = new Set(); // { source, copy } for every camera track currently going out through Flipper
+  const livePairs = new Set(); // every camera track currently going out through Flipper
+  const pairOf = new WeakMap(); // flipped copy -> its { source, copy, senders, finish }
 
   function linkLifecycle(copy, source, cleanup) {
     let finished = false;
-    const pair = { source, copy };
+    const pair = { source, copy, senders: new Set(), finish: null };
     const finish = () => {
       if (finished) return;
       finished = true;
@@ -85,8 +114,21 @@
       } catch {
         /* already stopped */
       }
+      if (source.readyState === 'live') {
+        for (const sender of pair.senders) {
+          if (senderTrack(sender) !== copy) continue; // Meet already moved this sender on
+          try {
+            nativeReplaceTrack.call(sender, source).catch(() => {});
+          } catch {
+            /* the connection is gone */
+          }
+        }
+      }
+      pair.senders.clear();
       send('status', { active: activeStreams });
     };
+    pair.finish = finish;
+    pairOf.set(copy, pair);
     currentFinish.set(source, finish);
     if (!wrappedSources.has(source)) {
       wrappedSources.add(source);
@@ -101,13 +143,32 @@
     livePairs.add(pair);
     activeStreams += 1;
     send('status', { active: activeStreams });
+    return pair;
+  }
+
+  // A sender now carries this track. Only our copies are tracked; anything else is ignored.
+  function noteSender(track, sender) {
+    const pair = track && pairOf.get(track);
+    if (pair && sender) pair.senders.add(sender);
+  }
+
+  // Finish a copy once no sender carries it any more.
+  function releaseIfUnused(copy) {
+    const pair = copy && pairOf.get(copy);
+    if (!pair) return;
+    for (const sender of pair.senders) {
+      if (senderTrack(sender) === copy) return; // still going out somewhere
+      pair.senders.delete(sender);
+    }
+    pair.finish();
   }
 
   // Preferred path: insertable streams. Frames are processed directly, so it keeps working
   // when the Meet tab is in the background (canvas timers get throttled there).
   function flipWithInsertableStreams(source) {
     const canvas = new OffscreenCanvas(1280, 720);
-    const ctx = canvas.getContext('2d');
+    // Camera frames are opaque and every draw covers the whole canvas, so skip the alpha channel.
+    const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('no 2D context'); // flippedCopy() then falls back to the canvas route
 
     const processor = new MediaStreamTrackProcessor({ track: source });
@@ -127,7 +188,9 @@
           canvas.height = ht;
         }
         drawFrame(ctx, frame, w, ht);
-        return new VideoFrame(canvas, { timestamp: frame.timestamp });
+        const init = { timestamp: frame.timestamp, alpha: 'discard' };
+        if (frame.duration != null) init.duration = frame.duration;
+        return new VideoFrame(canvas, init);
       } catch (err) {
         if (!warned) {
           warned = true; // one report is enough; this can repeat on every frame
@@ -147,16 +210,17 @@
       },
     });
 
-    processor.readable
+    const piping = processor.readable
       .pipeThrough(transformer)
-      .pipeTo(generator.writable, { signal: teardown.signal })
-      .catch(() => {
-        /* the pipeline ended: the track was stopped, or linkLifecycle() tore it down */
-      });
+      .pipeTo(generator.writable, { signal: teardown.signal });
 
     // Aborting the pipe also cancels the read from Meet's track, so a copy that ends on its own
     // doesn't leave frames being pulled and thrown away.
-    linkLifecycle(generator, source, () => teardown.abort());
+    const { finish } = linkLifecycle(generator, source, () => teardown.abort());
+    // The pipe normally ends because the track stopped or finish() tore it down, and finish() then
+    // does nothing more. Any other ending is a failure, and finish() puts Meet's own track back
+    // on the call.
+    piping.then(finish, finish);
     return generator;
   }
 
@@ -195,9 +259,13 @@
     return copy;
   }
 
-  // Screen shares must never be flipped. Chrome marks them in the track's settings, and its
-  // capture labels start with "screen:", "window:" or "web-contents-media-stream:".
+  // Screen shares must never be flipped. Every video track getDisplayMedia() hands out is recorded
+  // (see the wrapper at the bottom), Chrome marks shares in the track's settings, and its capture
+  // labels start with "screen:", "window:" or "web-contents-media-stream:".
+  const shareTracks = new WeakSet();
+
   function isScreenShare(track) {
+    if (shareTracks.has(track)) return true;
     let settings = {};
     try {
       settings = track.getSettings();
@@ -360,27 +428,90 @@
     }
   }
 
-  const pcProto = RTCPeerConnection.prototype;
-  const senderProto = RTCRtpSender.prototype;
-
-  const nativeAddTrack = pcProto.addTrack;
+  // ---- WebRTC wrappers ---------------------------------------------------------------------
+  // Each one swaps Meet's camera track for the flipped copy, and records which sender carries the
+  // copy so linkLifecycle() can release it or hand Meet's track back. If the native call fails,
+  // a copy made for it that nothing carries is released straight away.
   pcProto.addTrack = function addTrack(track, ...streams) {
-    return nativeAddTrack.call(this, outgoing(track), ...streams);
+    const sent = outgoing(track);
+    let sender;
+    try {
+      sender = nativeAddTrack.call(this, sent, ...streams);
+    } catch (err) {
+      if (sent !== track) releaseIfUnused(sent);
+      throw err;
+    }
+    noteSender(sent, sender);
+    return sender;
   };
 
-  const nativeAddTransceiver = pcProto.addTransceiver;
-  pcProto.addTransceiver = function addTransceiver(trackOrKind, init) {
-    return nativeAddTransceiver.call(this, outgoing(trackOrKind), init);
+  pcProto.addTransceiver = function addTransceiver(trackOrKind, ...rest) {
+    const sent = outgoing(trackOrKind);
+    let transceiver;
+    try {
+      transceiver = nativeAddTransceiver.call(this, sent, ...rest);
+    } catch (err) {
+      if (sent !== trackOrKind) releaseIfUnused(sent);
+      throw err;
+    }
+    noteSender(sent, transceiver && transceiver.sender);
+    return transceiver;
   };
 
-  const nativeReplaceTrack = senderProto.replaceTrack;
   senderProto.replaceTrack = function replaceTrack(track) {
-    return nativeReplaceTrack.call(this, outgoing(track));
+    const previous = senderTrack(this);
+    const sent = outgoing(track);
+    const result = nativeReplaceTrack.call(this, sent);
+    noteSender(sent, this);
+    // Once the swap settles, release whichever copy no sender carries any more: the one Meet moved
+    // away from on success, or the one just made for it on failure.
+    const settle = () => {
+      if (previous !== sent) releaseIfUnused(previous);
+      if (sent !== track) releaseIfUnused(sent);
+    };
+    result.then(settle, settle);
+    return result;
   };
+
+  pcProto.removeTrack = function removeTrack(sender) {
+    const previous = senderTrack(sender);
+    const result = nativeRemoveTrack.call(this, sender);
+    releaseIfUnused(previous);
+    return result;
+  };
+
+  // getStats(track) looks for a sender carrying that exact track. Meet only knows its own track,
+  // which no sender carries while Flipper is in between, so ask about the copy instead.
+  pcProto.getStats = function getStats(selector, ...rest) {
+    if (selector instanceof MediaStreamTrack) {
+      const copy = copies.get(selector);
+      if (copy && this.getSenders().some((s) => senderTrack(s) === copy)) selector = copy;
+    }
+    return nativeGetStats.call(this, selector, ...rest);
+  };
+
+  // Record every video track a screen, window or tab share produces (see isScreenShare). The
+  // promise is handed back untouched, so Meet sees exactly what Chrome returned.
+  if (typeof MediaDevices === 'function' && typeof MediaDevices.prototype.getDisplayMedia === 'function') {
+    const nativeGetDisplayMedia = MediaDevices.prototype.getDisplayMedia;
+    MediaDevices.prototype.getDisplayMedia = function getDisplayMedia(...args) {
+      const request = nativeGetDisplayMedia.apply(this, args);
+      request.then(
+        (stream) => {
+          try {
+            for (const t of stream.getVideoTracks()) shareTracks.add(t);
+          } catch {
+            /* not a stream: nothing to record */
+          }
+        },
+        () => {}
+      );
+      return request;
+    };
+  }
 
   // Meet finds its senders by comparing sender.track with its own track, so keep answering with
   // Meet's track, not our copy.
-  const nativeTrack = Object.getOwnPropertyDescriptor(senderProto, 'track');
   if (nativeTrack && nativeTrack.get) {
     Object.defineProperty(senderProto, 'track', {
       ...nativeTrack,

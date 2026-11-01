@@ -31,11 +31,20 @@
     if (area === 'local') pushConfig();
   });
 
-  // Alt+Shift+F toggles flipping.
+  // Alt+Shift+F toggles flipping. The physical key position (code) covers macOS, where Option
+  // changes the typed character; the typed key covers layouts such as Dvorak, where the key
+  // labelled F sits somewhere else.
+  const isShortcut = (e) =>
+    e.altKey &&
+    e.shiftKey &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    (e.code === 'KeyF' || (typeof e.key === 'string' && e.key.toLowerCase() === 'f'));
+
   window.addEventListener(
     'keydown',
     async (e) => {
-      if (!(e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyF')) return;
+      if (!isShortcut(e)) return;
       e.preventDefault(); // stop macOS from typing a special character
       // Holding the combo down fires repeated keydowns. Each would read the current "enabled"
       // value and write its negation; two of those in flight at once race and can collapse
@@ -51,9 +60,20 @@
     true
   );
 
-  // Live preview for the popup's two tiles. The popup opens a port while it is showing and keeps
-  // renewing it; only then does page.js spend any effort producing preview frames.
-  let previewPort = null;
+  // Live preview for the popup's two tiles. Each open popup (one per browser window) opens a port
+  // while it is showing and keeps renewing it; only then does page.js spend any effort producing
+  // preview frames.
+  const previewPorts = new Set();
+
+  const toPopups = (msg) => {
+    for (const port of previewPorts) {
+      try {
+        port.postMessage(msg);
+      } catch {
+        /* that popup closed while a frame was in flight */
+      }
+    }
+  };
 
   // Anything the page world posts could have been forged by a script on the page, so only pass
   // on what really is a small JPEG.
@@ -62,7 +82,7 @@
 
   chrome.runtime.onConnect.addListener((port) => {
     if (port.name !== 'flipper-preview') return;
-    previewPort = port;
+    previewPorts.add(port);
     toPage({ type: 'preview-watch' });
     port.onMessage.addListener((msg) => {
       // The popup renews every second or so. If it stops (crash, extension reload), page.js
@@ -71,24 +91,19 @@
     });
     port.onDisconnect.addListener(() => {
       void chrome.runtime.lastError; // read it so Chrome doesn't log it as unchecked
-      if (previewPort !== port) return; // a newer popup already took over
-      previewPort = null;
-      toPage({ type: 'preview-stop' });
+      previewPorts.delete(port);
+      if (previewPorts.size === 0) toPage({ type: 'preview-stop' }); // the last popup closed
     });
   });
 
   window.addEventListener('message', (e) => {
-    if (!previewPort) return;
-    try {
-      if (fromPage(e, 'preview-frame')) {
-        if (isJpeg(e.data.self) && isJpeg(e.data.others)) {
-          previewPort.postMessage({ type: 'frame', self: e.data.self, others: e.data.others });
-        }
-      } else if (fromPage(e, 'preview-idle')) {
-        previewPort.postMessage({ type: 'idle' });
+    if (previewPorts.size === 0) return;
+    if (fromPage(e, 'preview-frame')) {
+      if (isJpeg(e.data.self) && isJpeg(e.data.others)) {
+        toPopups({ type: 'frame', self: e.data.self, others: e.data.others });
       }
-    } catch {
-      /* the popup closed while a frame was in flight */
+    } else if (fromPage(e, 'preview-idle')) {
+      toPopups({ type: 'idle' });
     }
   });
 

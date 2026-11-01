@@ -1,6 +1,6 @@
 # Privacy Policy for Flipper
 
-Last updated: September 22, 2026
+Last updated: November 1, 2026
 
 Flipper is a Chrome extension with one function: it changes the direction (horizontal, vertical, or both) that a user's outgoing webcam video appears to other participants in a Google Meet call. The user's own self view in Meet is never changed.
 
@@ -29,7 +29,7 @@ Apart from the two settings described above, nothing Flipper processes is retain
 
 ## Screen sharing
 
-Flipper detects screen and window shares and never flips them. Only camera video is affected.
+Flipper recognizes screen, window and tab shares, both by recording every video track that Chrome's screen sharing picker hands to the page and by the markers Chrome puts on shared video, and does not flip them. Only camera video is affected.
 
 ## Chrome Web Store User Data Policy (Limited Use)
 
