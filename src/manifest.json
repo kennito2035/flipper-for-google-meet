@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Flipper",
+  "name": "Flipper for Google Meet™",
   "version": "1.0.1",
-  "description": "Flip your webcam in Google Meet for other participants (horizontal, vertical or both). Your own preview stays as Meet shows it.",
+  "description": "Flip your webcam for Google Meet™: others see it your way (horizontal, vertical or both). Your own preview never changes.",
   "minimum_chrome_version": "111",
   "icons": {
     "16": "icons/icon16.png",
@@ -17,7 +17,7 @@
     "https://meet.google.com/*"
   ],
   "action": {
-    "default_title": "Flipper",
+    "default_title": "Flipper for Google Meet™",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

@@ -1,8 +1,8 @@
-# Privacy Policy for Flipper
+# Privacy Policy for Flipper for Google Meet™
 
-Last updated: November 1, 2026
+Last updated: November 12, 2026
 
-Flipper is a Chrome extension with one function: it changes the direction (horizontal, vertical, or both) that a user's outgoing webcam video appears to other participants in a Google Meet call. The user's own self view in Meet is never changed.
+Flipper for Google Meet™ ("Flipper") is a Chrome extension with one function: it changes the direction (horizontal, vertical, or both) that a user's outgoing webcam video appears to other participants in a Google Meet call. The user's own self view in Meet is never changed.
 
 ## What Flipper processes
 
@@ -51,3 +51,5 @@ If Flipper's data practices ever change, this policy will be updated first, and 
 ## Contact
 
 Questions about this policy can be sent to kenbuildsthings+flipper@gmail.com.
+
+Google Meet is a trademark of Google LLC. Flipper is not affiliated with, endorsed by, or sponsored by Google.
