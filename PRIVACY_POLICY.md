@@ -50,6 +50,6 @@ If Flipper's data practices ever change, this policy will be updated first, and 
 
 ## Contact
 
-Questions about this policy can be sent to kenbuildsthings+flipper@gmail.com.
+Questions about this policy can be sent to kenbuildsthings+extensions@gmail.com.
 
 Google Meet is a trademark of Google LLC. Flipper is not affiliated with, endorsed by, or sponsored by Google.
