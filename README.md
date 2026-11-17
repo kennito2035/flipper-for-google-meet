@@ -16,14 +16,14 @@ Toggle it from the popup or with `Alt+Shift+F` while a Meet tab is focused. A ho
 
 ## Install
 
-- **Chrome Web Store**: https://chromewebstore.google.com/detail/baifonnodflncodagjffeiejkepippcj (the listing appears once Google's review is complete)
+- **Chrome Web Store**: https://chromewebstore.google.com/detail/flipper-for-google-meet/baifonnodflncodagjffeiejkepippcj
 - **From source**: download this repository, open `chrome://extensions`, turn on Developer mode, click "Load unpacked" and pick the `src` folder.
 
 Needs Chrome 111 or newer.
 
 ## Privacy
 
-Flipper has no server, no analytics and no network code. It runs only on `meet.google.com`, changes only your camera video (screen shares and audio go out untouched), and saves two settings on your device: on or off, and the direction. The full policy is in [PRIVACY_POLICY.md](PRIVACY_POLICY.md) and at https://kennito2035.github.io/flipper-privacy/.
+Flipper has no server, no analytics and no network code. It runs only on `meet.google.com`, changes only your camera video (screen shares and audio go out untouched), and saves two settings on your device: on or off, and the direction. The full policy is in [PRIVACY_POLICY.md](PRIVACY_POLICY.md) and at https://kennito2035.github.io/flipper-for-google-meet/.
 
 ## How it works
 
